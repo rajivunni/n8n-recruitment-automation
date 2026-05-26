@@ -1,0 +1,380 @@
+{
+  "name": "CV Intake → Candidate Profile",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {},
+        "options": {
+          "dataPropertyAttachmentsPrefixName": "attachment_",
+          "downloadAttachments": true
+        }
+      },
+      "id": "e625612d-ca3c-4ee6-912f-2cc019bce6b0",
+      "name": "Gmail - New CV Email",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "sHbJF5Zc84Wb6kqH",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [220, 0],
+      "id": "6f9b7980-a427-4517-90ca-e8177583c603",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4.1",
+        "prompt": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a recruitment assistant.  Extract candidate data from the CV and return ONLY valid JSON.  Fields: name email phone current_title current_company location years_experience top_skills brief_summary  Rules: - Return ONLY JSON (no markdown, no text) - If missing, return \"\" - years_experience = number only - top_skills = comma separated (max 6) - brief_summary = 2 sentences, third person"
+            },
+            {
+              "content": "=={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {},
+        "requestOptions": {}
+      },
+      "id": "202e2c26-259f-40bd-8480-32d67203e8bb",
+      "name": "Parse CV with AI",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [440, 0],
+      "credentials": {
+        "openAiApi": {
+          "id": "DskVTOJ1NdjW0dve",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "=={{ JSON.parse(($json.message.content || '').replace(/```json/g, '').replace(/```/g, '').trim()) }}",
+        "options": {}
+      },
+      "id": "014a84ff-fcd0-4a9c-a31a-53bddb5a3d45",
+      "name": "Map Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4.1-mini",
+        "prompt": {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing a recruiter outreach email to a candidate. Return ONLY the email text, no subject line, no formatting, no preamble."
+            },
+            {
+              "role": "user",
+              "content": "=Candidate details:\n- Name: {{ $json.name }}\n- Current role: {{ $json.current_title }} at {{ $json.current_company }}\n- Key skills: {{ $json.top_skills }}\n- Experience: {{ $json.years_experience }} years\n\nWrite a brief, professional recruiter outreach email (150-200 words) that:\n- Addresses them by first name\n- References their current role and company\n- Mentions 2-3 of their key skills\n- Suggests they might be a good fit for similar opportunities\n- Invites them to a quick call\n- Signs off as 'The Recruitment Team'\n\nReturn ONLY the email text, no subject line, no formatting."
+            }
+          ]
+        },
+        "options": {},
+        "requestOptions": {}
+      },
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Generate Outreach Email",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [880, 0],
+      "credentials": {
+        "openAiApi": {
+          "id": "DskVTOJ1NdjW0dve",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { ...$('Map Fields').item.json, outreach_draft: $json.message.content.trim() } }}",
+        "options": {}
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "name": "Add Outreach to Record",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Nsu-uo1pJdOYFdYT0PNa9_faxDRmlIoniAuUVjQxjz4",
+          "mode": "list",
+          "cachedResultName": "Candidate Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Nsu-uo1pJdOYFdYT0PNa9_faxDRmlIoniAuUVjQxjz4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Candidates",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.name }}",
+            "Email": "={{ $json.email }}",
+            "Phone": "={{ $json.phone }}",
+            "Current Title": "={{ $json.current_title }}",
+            "Current Company": "={{ $json.current_company }}",
+            "Location": "={{ $json.location }}",
+            "Years Experience": "={{ $json.years_experience }}",
+            "Key Skills": "={{ $json.top_skills }}",
+            "Summary": "={{ $json.brief_summary }}",
+            "Outreach Draft": "={{ $json.outreach_draft }}",
+            "Date Added": "={{ $now.format('yyyy-MM-dd') }}",
+            "Stage": "New",
+            "Source": "Email CV"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Phone",
+              "displayName": "Phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Current Title",
+              "displayName": "Current Title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Current Company",
+              "displayName": "Current Company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Location",
+              "displayName": "Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Years Experience",
+              "displayName": "Years Experience",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Key Skills",
+              "displayName": "Key Skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Summary",
+              "displayName": "Summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Outreach Draft",
+              "displayName": "Outreach Draft",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date Added",
+              "displayName": "Date Added",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Stage",
+              "displayName": "Stage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "d7e589a0-39f8-40bc-b051-20bd89c3d9fc",
+      "name": "Add to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1320, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "lT0M6yMFRqykut8m",
+          "name": "Google Sheets account 2"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail - New CV Email": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Parse CV with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse CV with AI": {
+      "main": [
+        [
+          {
+            "node": "Map Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Fields": {
+      "main": [
+        [
+          {
+            "node": "Generate Outreach Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Outreach Email": {
+      "main": [
+        [
+          {
+            "node": "Add Outreach to Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Outreach to Record": {
+      "main": [
+        [
+          {
+            "node": "Add to Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "831b4049-b581-421f-bcb2-da58b8be29ee",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ce14a24ff2970397f7d3c265029c8f7c83befeb39e2972f97271fa7780cd181c"
+  },
+  "id": "Wse4pdDS3HsIR3Ip",
+  "tags": []
+}
