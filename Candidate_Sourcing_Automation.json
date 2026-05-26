@@ -1,0 +1,708 @@
+{
+  "name": "Candidate Sourcing Automation",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "fa53d218-4d7e-420e-8126-4e73a729a6f0",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1104,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "7eec621a-362e-4a1a-8ac8-841910414898",
+      "name": "Set Job Requirements",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        -880,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apollo.io/v1/mixed_people/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ api_key: $env.APOLLO_API_KEY, person_titles: [$json.role_title], q_keywords: $json.required_skills, person_locations: [$json.location], page: 1, per_page: 100 }) }}",
+        "options": {}
+      },
+      "id": "a055ae5d-4179-4bb4-9f3f-cbf62845a13d",
+      "name": "Apollo: Search Candidates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -656,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const apolloData = $input.all()[0].json;\nconst people = apolloData.people || [];\nconst jobReqs = $('Set Job Requirements').first().json;\n\nif (people.length === 0) {\n  throw new Error('Apollo returned 0 candidates. Check your search criteria and API key.');\n}\n\nreturn people.map(person => ({\n  json: {\n    // Job requirements (carried through the entire pipeline)\n    role_title: jobReqs.role_title,\n    required_skills: jobReqs.required_skills,\n    years_experience: jobReqs.years_experience,\n    job_location: jobReqs.location,\n    nice_to_have: jobReqs.nice_to_have || '',\n    // Candidate fields\n    name: person.name || '',\n    title: person.title || '',\n    company: (person.organization && person.organization.name) || '',\n    linkedin_url: person.linkedin_url || '',\n    email: person.email || '',\n    location: [person.city, person.state, person.country].filter(Boolean).join(', ')\n  }\n}));"
+      },
+      "id": "da486c64-a227-48f0-ac93-465d078c73c9",
+      "name": "Normalize Candidates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "53e54e78-d8f8-462a-8018-b58a47272a6a",
+      "name": "Score: Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -224,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const c = $input.item.json;\n\nconst systemPrompt = 'You are a recruitment expert scoring candidate fit for a job. Return ONLY valid JSON with no markdown, no explanation, no preamble.';\n\nconst userContent = `JOB REQUIREMENTS:\\n- Role: ${c.role_title}\\n- Required Skills: ${c.required_skills}\\n- Years Experience: ${c.years_experience}\\n- Location: ${c.job_location}\\n- Nice to have: ${c.nice_to_have}\\n\\nCANDIDATE PROFILE:\\n- Name: ${c.name}\\n- Current Role: ${c.title}\\n- Company: ${c.company}\\n- Location: ${c.location}\\n\\nSCORING CRITERIA:\\n1. Skills Match (0-40 points): Infer likely skills from their job title and company, compare to required skills\\n2. Experience Level (0-30 points): Does seniority of their current role match the required years?\\n3. Role Relevance (0-20 points): Is their current role similar to the target role?\\n4. Location Match (0-10 points): Are they in the same location or within reasonable commute/relocation distance?\\n\\nReturn ONLY this JSON structure:\\n{\\n  \"score\": <total 0-100>,\\n  \"skills_match\": <0-40>,\\n  \"experience_match\": <0-30>,\\n  \"role_match\": <0-20>,\\n  \"location_match\": <0-10>,\\n  \"reasoning\": \"<2-3 sentence explanation>\",\\n  \"red_flags\": \"<any concerns or empty string>\"\\n}`;\n\nconst requestBody = {\n  model: 'claude-sonnet-4-20250514',\n  max_tokens: 500,\n  system: systemPrompt,\n  messages: [{ role: 'user', content: userContent }]\n};\n\nreturn [{ json: { ...c, _requestBody: JSON.stringify(requestBody) } }];"
+      },
+      "id": "352eb663-495c-40ea-8559-115072d1e8ec",
+      "name": "Build Score Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.CLAUDE_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json._requestBody }}",
+        "options": {}
+      },
+      "id": "4a429fe1-345c-4076-a242-0c59ae2e6ff3",
+      "name": "Claude: Score Candidate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "id": "4c636e74-2cb3-4151-80d9-5b51b9d19413",
+      "name": "Wait 1s (Scoring)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "webhookId": "9f8e7d6c-0008-4000-a000-000000000008",
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const claudeResponse = $input.item.json;\nconst candidate = $('Build Score Request').item.json;\nconst content = (claudeResponse.content && claudeResponse.content[0] && claudeResponse.content[0].text) || '';\n\ntry {\n  const cleaned = content.replace(/```json/g, '').replace(/```/g, '').trim();\n  const scored = JSON.parse(cleaned);\n  const { _requestBody, ...candidateData } = candidate;\n  return [{\n    json: {\n      ...candidateData,\n      score: typeof scored.score === 'number' ? scored.score : 0,\n      skills_match: typeof scored.skills_match === 'number' ? scored.skills_match : 0,\n      experience_match: typeof scored.experience_match === 'number' ? scored.experience_match : 0,\n      role_match: typeof scored.role_match === 'number' ? scored.role_match : 0,\n      location_match: typeof scored.location_match === 'number' ? scored.location_match : 0,\n      reasoning: scored.reasoning || '',\n      red_flags: scored.red_flags || ''\n    }\n  }];\n} catch (error) {\n  const { _requestBody, ...candidateData } = candidate;\n  return [{\n    json: {\n      ...candidateData,\n      score: 0,\n      skills_match: 0,\n      experience_match: 0,\n      role_match: 0,\n      location_match: 0,\n      reasoning: 'Error: could not parse score response',\n      red_flags: 'Parse error: ' + error.message\n    }\n  }];\n}"
+      },
+      "id": "1bdb6ec5-a738-4cdb-95c1-9e8fcc993021",
+      "name": "Parse Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// Filter: keep only score >= 60\nconst filtered = items.filter(item => item.json.score >= 60);\n\n// Sort: descending by score\nconst sorted = filtered.sort((a, b) => b.json.score - a.json.score);\n\n// Limit to top 50\nconst top50 = sorted.slice(0, 50);\n\n// Add rank (1-based)\nreturn top50.map((item, index) => ({\n  json: {\n    rank: index + 1,\n    ...item.json\n  }\n}));"
+      },
+      "id": "b8e43e35-8ecb-45c7-84fc-8ee2fad38fe8",
+      "name": "Filter + Sort + Top 50",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "06e6339b-23c1-455f-b59f-4ec9f81dfa49",
+      "name": "Outreach: Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        0,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const c = $input.item.json;\n\nconst userContent = `Write a brief, professional LinkedIn recruiter outreach message (120-150 words) to ${c.name}, who is currently ${c.title} at ${c.company}.\\n\\nMention their relevant experience in the ${c.role_title} space and invite them to discuss this opportunity. Be warm but professional. Do not mention salary.\\n\\nReturn only the message text, no subject line, no extra formatting, no greeting label.`;\n\nconst requestBody = {\n  model: 'claude-sonnet-4-20250514',\n  max_tokens: 300,\n  messages: [{ role: 'user', content: userContent }]\n};\n\nreturn [{ json: { ...c, _outreachRequestBody: JSON.stringify(requestBody) } }];"
+      },
+      "id": "ee914327-00e9-46d8-9544-d8978c748a44",
+      "name": "Build Outreach Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.CLAUDE_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json._outreachRequestBody }}",
+        "options": {}
+      },
+      "id": "e394aff4-e1f0-4b6c-97cc-4282260fb81c",
+      "name": "Claude: Generate Outreach",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "id": "31f7e1f6-3fe8-4708-a1ac-a642ce0c497a",
+      "name": "Wait 1s (Outreach)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "webhookId": "9f8e7d6c-0014-4000-a000-000000000014",
+      "position": [
+        672,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const claudeResponse = $input.item.json;\nconst candidate = $('Build Outreach Request').item.json;\nconst outreachText = (claudeResponse.content && claudeResponse.content[0] && claudeResponse.content[0].text) || '';\nconst { _outreachRequestBody, ...candidateData } = candidate;\nreturn [{\n  json: {\n    ...candidateData,\n    outreach_draft: outreachText.trim()\n  }\n}];"
+      },
+      "id": "61e54e32-f1ca-4c51-afa0-e2cb519b66da",
+      "name": "Add Outreach to Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Candidate Sourcing Results",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Rank": "={{ $json.rank }}",
+            "Name": "={{ $json.name }}",
+            "Email": "={{ $json.email }}",
+            "Current Title": "={{ $json.title }}",
+            "Current Company": "={{ $json.company }}",
+            "Location": "={{ $json.location }}",
+            "Match Score": "={{ $json.score }}",
+            "Skills Match": "={{ $json.skills_match }}",
+            "Experience Match": "={{ $json.experience_match }}",
+            "Role Match": "={{ $json.role_match }}",
+            "Location Match": "={{ $json.location_match }}",
+            "Reasoning": "={{ $json.reasoning }}",
+            "Red Flags": "={{ $json.red_flags }}",
+            "Outreach Draft": "={{ $json.outreach_draft }}",
+            "LinkedIn URL": "={{ $json.linkedin_url }}",
+            "Date Generated": "={{ $now.format('yyyy-MM-dd') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Rank",
+              "displayName": "Rank",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Current Title",
+              "displayName": "Current Title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Current Company",
+              "displayName": "Current Company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Location",
+              "displayName": "Location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Match Score",
+              "displayName": "Match Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Skills Match",
+              "displayName": "Skills Match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Experience Match",
+              "displayName": "Experience Match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Role Match",
+              "displayName": "Role Match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Location Match",
+              "displayName": "Location Match",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Reasoning",
+              "displayName": "Reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Red Flags",
+              "displayName": "Red Flags",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Outreach Draft",
+              "displayName": "Outreach Draft",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "LinkedIn URL",
+              "displayName": "LinkedIn URL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date Generated",
+              "displayName": "Date Generated",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "d2f0ace4-8847-44e0-b2a4-4c707bc94912",
+      "name": "Write to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        0,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst count = items.length;\n\nif (count === 0) {\n  return [{ json: {\n    count: 0,\n    role_title: $('Set Job Requirements').first().json.role_title,\n    top_candidate_name: 'N/A',\n    top_score: 0,\n    sheet_url: 'https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID'\n  }}];\n}\n\nconst top = items[0].json;\nreturn [{ json: {\n  count: count,\n  role_title: top.role_title,\n  top_candidate_name: top.name,\n  top_score: top.score,\n  sheet_url: 'https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID'\n}}];"
+      },
+      "id": "86b7dbba-d9df-48d7-9b0c-9e94748ba9b5",
+      "name": "Prepare Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        672
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.notification_email || 'rajiv.unnikrishnan@gmail.com' }}",
+        "subject": "=Candidate Sourcing Complete: {{ $json.role_title }}",
+        "message": "=Found {{ $json.count }} matched candidates (score ≥ 60) for the {{ $json.role_title }} role.\n\nTop candidate: {{ $json.top_candidate_name }} (Score: {{ $json.top_score }}/100)\n\nView full results:\n{{ $json.sheet_url }}",
+        "options": {}
+      },
+      "id": "375cf4dd-a3cb-4b41-8692-97769a8b7787",
+      "name": "Gmail: Send Notification",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        448,
+        672
+      ],
+      "webhookId": "3e368fb9-9aef-4d97-b65a-f91c27245ca4"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Job Requirements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Job Requirements": {
+      "main": [
+        [
+          {
+            "node": "Apollo: Search Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apollo: Search Candidates": {
+      "main": [
+        [
+          {
+            "node": "Normalize Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Candidates": {
+      "main": [
+        [
+          {
+            "node": "Score: Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score: Loop": {
+      "main": [
+        [
+          {
+            "node": "Build Score Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Filter + Sort + Top 50",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Score Request": {
+      "main": [
+        [
+          {
+            "node": "Claude: Score Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Score Candidate": {
+      "main": [
+        [
+          {
+            "node": "Wait 1s (Scoring)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1s (Scoring)": {
+      "main": [
+        [
+          {
+            "node": "Parse Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Score": {
+      "main": [
+        [
+          {
+            "node": "Score: Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter + Sort + Top 50": {
+      "main": [
+        [
+          {
+            "node": "Outreach: Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outreach: Loop": {
+      "main": [
+        [
+          {
+            "node": "Build Outreach Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write to Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Outreach Request": {
+      "main": [
+        [
+          {
+            "node": "Claude: Generate Outreach",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Generate Outreach": {
+      "main": [
+        [
+          {
+            "node": "Wait 1s (Outreach)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1s (Outreach)": {
+      "main": [
+        [
+          {
+            "node": "Add Outreach to Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Outreach to Record": {
+      "main": [
+        [
+          {
+            "node": "Outreach: Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write to Google Sheet": {
+      "main": [
+        [
+          {
+            "node": "Prepare Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Notification": {
+      "main": [
+        [
+          {
+            "node": "Gmail: Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "3fa2dfcd-21fd-4c49-aa71-b5237579f734",
+  "meta": {
+    "instanceId": "ce14a24ff2970397f7d3c265029c8f7c83befeb39e2972f97271fa7780cd181c"
+  },
+  "id": "eJGj375XEieluV3P",
+  "tags": []
+}
